@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Example</title>
+  </head>
+  <body>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <button id="callButton" onclick="startCall()" disabled>Call</button>
+    <button id="hangUpButton" onclick="hangUp()" disabled>Hang Up</button>
+
+    <script>
+      const localVideo = document.getElementById("localVideo");
+      const remoteVideo = document.getElementById("remoteVideo");
+      const callButton = document.getElementById("callButton");
+      const hangUpButton = document.getElementById("hangUpButton");
+
+      let localStream;
+      let pc;
+
+      // Replace 'wss://your-websocket-server' with your actual WebSocket server URL
+      const ws = new WebSocket("wss://662b-104-28-236-164.ngrok-free.app");
+
+      ws.addEventListener("open", () => {
+        console.log("WebSocket connection opened");
+        callButton.disabled = false;
+      });
+
+      ws.addEventListener("message", function (event) {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data && typeof data === "object") {
+            switch (data.type) {
+              case "offer":
+                handleOffer(data.offer);
+                break;
+              case "answer":
+                handleAnswer(data.answer);
+                break;
+              case "ice-candidate":
+                handleIceCandidate(data.candidate);
+                break;
+              // Handle other message types if needed
+              default:
+                console.log("Unknown message type:", data.type);
+            }
+          } else {
+            console.error("Invalid JSON data:", event.data);
+          }
+        } catch (error) {
+          console.error("Error parsing JSON:", error);
+        }
+      });
+
+      async function startCall() {
+        callButton.disabled = true;
+        hangUpButton.disabled = false;
+
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+          localVideo.srcObject = localStream;
+
+          pc = new RTCPeerConnection();
+          localStream
+            .getTracks()
+            .forEach((track) => pc.addTrack(track, localStream));
+
+          pc.createOffer()
+            .then((offer) => pc.setLocalDescription(offer))
+            .then(() => send({ type: "offer", offer: pc.localDescription }))
+            .catch(handleError);
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              send({ type: "ice-candidate", candidate: event.candidate });
+            }
+          };
+
+          pc.ontrack = (event) => {
+            remoteVideo.srcObject = event.streams[0];
+          };
+        } catch (error) {
+          handleError(error);
+        }
+      }
+
+      function hangUp() {
+        if (pc) {
+          pc.close();
+          pc = null;
+        }
+
+        localStream.getTracks().forEach((track) => track.stop());
+        localVideo.srcObject = null;
+        remoteVideo.srcObject = null;
+
+        callButton.disabled = false;
+        hangUpButton.disabled = true;
+      }
+
+      function handleOffer(offer) {
+        pc = new RTCPeerConnection();
+
+        // Set up the local stream
+        localStream
+          .getTracks()
+          .forEach((track) => pc.addTrack(track, localStream));
+
+        // Set the remote description to the received offer
+        pc.setRemoteDescription(offer)
+          .then(() => pc.createAnswer())
+          .then((answer) => pc.setLocalDescription(answer))
+          .then(() => {
+            // Send the answer to the remote peer
+            send({ type: "answer", answer: pc.localDescription });
+          })
+          .catch(handleError);
+
+        // Set up event listeners
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            // Send the ICE candidate to the remote peer
+            send({ type: "ice-candidate", candidate: event.candidate });
+          }
+        };
+
+        pc.ontrack = (event) => {
+          remoteVideo.srcObject = event.streams[0];
+        };
+      }
+
+      function handleAnswer(answer) {
+        // Handle incoming answer
+        pc.setRemoteDescription(answer).catch(handleError);
+      }
+
+      function handleIceCandidate(candidate) {
+        // Handle incoming ICE candidate
+        pc.addIceCandidate(candidate).catch(handleError);
+      }
+
+      function handleError(error) {
+        console.error("Error:", error);
+        hangUp();
+      }
+
+      function send(data) {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify(data));
+        }
+      }
+    </script>
+  </body>
+</html>
